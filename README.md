@@ -5,4 +5,4 @@ Team 14 (Mooyeol Oh, Muhammad Izaaz) implementation for the paper text2mesh. The
 A Horse turning into a horse made of colorful candy
 
 ![Normal Horse](https://github.com/izaazm/text2meshCS492/blob/main/result/candy%20horse/iter_0.jpg?raw=true)
-![Normal Horse](https://github.com/izaazm/text2meshCS492/blob/main/result/candy%20horse/iter_700.jpg?raw=true)
+![Candy Horse](https://github.com/izaazm/text2meshCS492/blob/main/result/candy%20horse/iter_700.jpg?raw=true)

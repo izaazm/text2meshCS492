@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 # parameters
 root_path = '/content/drive/MyDrive/project/implementation/codes'
-exp_name = 'person ninja'
+exp_name = 'candy horse'
 n_iter = 750
 progressive_encoding = True
 width = 256
@@ -25,8 +25,8 @@ sigma = 6.0
 lr = 0.0005
 lr_decay = 0.9
 standardize = True
-obj_path = root_path + "/data/source_meshes/person.obj"  
-prompt = "a 3D rendering of a ninja in unreal engine"
+obj_path = root_path + "/data/source_meshes/horse.obj"  
+prompt = "a 3D rendering of a horse made of colorful candy"
 out_dir = root_path + "/result/" + exp_name
 frontview_center = [1.96349, 0.6283]
 frontview_std = 4
@@ -110,43 +110,51 @@ class neural_style_field(nn.Module):
         
         self.pe_layer = progessive_encoding(map_size=width, n_iter=n_iter, dim=input_dim)
         
-        layers = []
-        layers.append(fourier_feature(input_dim, width, sigma))
-        if progressive_encoding:
-            layers.append(self.pe_layer)
-        layers.append(nn.Linear(width * 2 + input_dim, width))
-        layers.append(nn.ReLU())
-        for i in range(depth):
-            layers.append(nn.Linear(width, width))
-            layers.append(nn.ReLU())
-        self.base = nn.ModuleList(layers)
-                                            
-        color_layers = []
-        for _ in range(2):
-            color_layers.append(nn.Linear(width, width))
-            color_layers.append(nn.ReLU())
-        color_layers.append(nn.Linear(width, 3))
-        self.mlp_rgb = nn.ModuleList(color_layers)
-
-        normal_layers = []
-        for _ in range(2):
-            normal_layers.append(nn.Linear(width, width))
-            normal_layers.append(nn.ReLU())
-        normal_layers.append(nn.Linear(width, 1))
-        self.mlp_normal = nn.ModuleList(normal_layers)
+        if pos_encode:
+            self.base_layer = nn.Sequential(fourier_feature(input_dim, width, sigma),
+                                            self.pe_layer,
+                                            nn.Linear(width * 2 + input_dim, width),
+                                            nn.ReLU(),
+                                            nn.Linear(width, width),
+                                            nn.ReLU(),
+                                            nn.Linear(width, width),
+                                            nn.ReLU(),
+                                            nn.Linear(width, width),
+                                            nn.ReLU(),
+                                            nn.Linear(width, width),
+                                            nn.ReLU())
+        else :
+            self.base_layer = nn.Sequential(fourier_feature(input_dim, width, sigma),
+                                            nn.Linear(width * 2 + input_dim, width),
+                                            nn.ReLU(),
+                                            nn.Linear(width, width),
+                                            nn.ReLU(),
+                                            nn.Linear(width, width),
+                                            nn.ReLU(),
+                                            nn.Linear(width, width),
+                                            nn.ReLU(),
+                                            nn.Linear(width, width),
+                                            nn.ReLU())
+                   
+        self.mlp_color = nn.Sequential(nn.Linear(width, width),
+                                       nn.ReLU(),
+                                       nn.Linear(width, width),
+                                       nn.ReLU(),
+                                       nn.Linear(width, 3))
+                             
+                             
+        self.mlp_norm = nn.Sequential(nn.Linear(width, width),
+                                       nn.ReLU(),
+                                       nn.Linear(width, width),
+                                       nn.ReLU(),
+                                       nn.Linear(width, 1))                                         
                                        
     def forward(self, x):
-        for layer in self.base:
-            x = layer(x)
-        colors = self.mlp_rgb[0](x)
-        for layer in self.mlp_rgb[1:]:
-            colors = layer(colors)
-        displ = self.mlp_normal[0](x)
-        for layer in self.mlp_normal[1:]:
-            displ = layer(displ)
-        
-        color = F.tanh(colors) / 2
-        normal = F.tanh(displ) * 0.1
+        x = self.base_layer(x)
+        color = self.mlp_color(x)
+        normal = self.mlp_norm(x)
+        color = F.tanh(color) / 2
+        normal = F.tanh(normal) * 0.1
         
         return color, normal
         
@@ -272,13 +280,14 @@ if __name__ == '__main__':
     net_input = copy.deepcopy(mesh.vertices)
     vertices = copy.deepcopy(net_input)
     color_now = torch.full(size=(mesh.faces.shape[0], 3, 3), fill_value=0.5, device=device)
-    background = torch.Tensor([1, 1, 1]).to(device) 
+    background = torch.Tensor([1, 1, 1]).to(device) # white
     
     # clip encode prompt
     adj_prompt = " ".join(prompt)
     clip_encoded_prompt = clip_model.encode_text(clip.tokenize([adj_prompt]).to(device))
     
     # train
+    optim.zero_grad()
     for iter in tqdm(range(n_iter)):
         this_mesh = mesh
         net_input = net_input.to(device)
@@ -287,9 +296,6 @@ if __name__ == '__main__':
         this_mesh.face_attributes = color_now + kal.ops.mesh.index_vertices_by_faces(pred_color.unsqueeze(0),
                                                                                         this_mesh.faces)
         this_mesh = mesh_normalizer(this_mesh)
-        
-    
-        optim.zero_grad()
         rendered_images, _, _ = render.render_front_views(this_mesh, 
                                                           n_views=5,
                                                           background=background)
@@ -333,6 +339,10 @@ if __name__ == '__main__':
                colorless_loss = colorless_loss - torch.cosine_similarity(torch.mean(clip_encoded_render, dim=0, keepdim=True), clip_encoded_prompt)
         colorless_loss.backward(retain_graph=True)
 
+        for param in net.mlp_color.parameters():
+            param.requires_grad = True
+        for param in net.mlp_norm.parameters():
+            param.requires_grad = True
 
         optim.step()
         lr_scheduler.step()
@@ -343,11 +353,13 @@ if __name__ == '__main__':
             print(f'iter {iter}/{n_iter} || loss={this_loss:.4f}')
             save_path = os.path.join(out_dir, 'iter_{}.jpg'.format(iter))
             torchvision.utils.save_image(rendered_images, save_path)
+
+        optim.zero_grad()
             
     
     # save color and vertices
     with torch.no_grad():
-        pred_color, pred_normal = net(input)
+        pred_color, pred_normal = net(net_input)
         pred_normal = pred_normal.detach()
         pred_color = pred_color.detach()
         torch.save(pred_color.cpu(), os.path.join(out_dir, f"pred_color.pt"))
